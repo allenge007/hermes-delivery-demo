@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="A static explorer with synthetic order data.">
+<title>Harbor · Order explorer</title><link rel="stylesheet" href="styles.css"></head>
+<body><main>
+<header><a class="brand" href="./" aria-label="Harbor home"><span class="mark" aria-hidden="true">H</span> harbor</a><span class="pill">STATIC DEMO</span></header>
+<section class="intro"><div class="eyebrow">A LITTLE CLARITY, AT A GLANCE</div><h1>Find the order.<br><span>Keep the overview.</span></h1>
+<p>A quiet workspace for searching, filtering, and exploring twelve synthetic orders. No account. No backend. Just the essentials.</p></section>
+<section class="workspace" aria-label="Order explorer">
+<div class="toolbar"><form id="filters"><label class="search"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"></circle><path d="m16 16 4 4"></path></svg><span class="sr">Search orders</span><input id="query" name="query" placeholder="Search an ID or item…" autocomplete="off"></label>
+<label class="select"><span class="sr">Status</span><select id="status" name="status"><option value="all">All statuses</option><option value="pending">Pending</option><option value="paid">Paid</option><option value="shipped">Shipped</option></select></label><button class="button" type="submit">Search</button></form><button id="reset" class="text-button">Reset</button></div>
+<div class="table-head"><span>ORDER / ITEM</span><span>STATUS</span><span>TOTAL</span></div>
+<div id="rows" aria-live="polite"></div>
+<footer class="table-footer"><span id="result-count"></span><div class="pagination"><button id="previous" aria-label="Previous page">←</button><span id="page-label"></span><button id="next" aria-label="Next page">→</button></div></footer>
+</section><aside class="note"><span class="dot"></span>All data is fictional. Search and filter state stays in the URL so a refresh keeps your place.</aside>
+<footer class="page-footer"><span>HARBOR / PUBLIC STATIC EXAMPLE</span><span id="build-status">Unpublished local source</span></footer>
+</main><script type="module" src="app.mjs"></script></body></html>
