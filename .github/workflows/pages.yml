@@ -1,37 +1,126 @@
 name: Static demo CI and Pages
 on:
-  push:
+  pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
+    inputs:
+      source_sha:
+        required: true
+        type: string
+      build_run_id:
+        required: true
+        type: string
+      build_attempt:
+        required: true
+        type: string
+      artifact_id:
+        required: true
+        type: string
+      artifact_sha256:
+        required: true
+        type: string
+      package_digest:
+        required: true
+        type: string
+      approval_digest:
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
   group: pages-demo
   cancel-in-progress: false
+env:
+  SOURCE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || inputs.source_sha }}
 jobs:
   build:
-    if: github.repository == 'allenge007/hermes-delivery-demo' && github.ref == 'refs/heads/main'
+    if: github.repository == 'allenge007/hermes-delivery-demo' && (github.event_name == 'pull_request' && github.event.pull_request.head.repo.id == 1411533905 || github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ env.SOURCE_SHA }}
           persist-credentials: false
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '24'
-      - name: Independent static example checks
-        run: node --test tests/*.test.mjs
+      - name: Exact source and approved build script
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';import {createHash} from 'node:crypto';import {execFileSync} from 'node:child_process';
+          if(!/^[a-f0-9]{40}$/.test(process.env.SOURCE_SHA))throw Error('Invalid source');
+          if(execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8'}).trim()!==process.env.SOURCE_SHA)throw Error('Checkout changed');
+          const digest=createHash('sha256').update(fs.readFileSync('scripts/build.mjs')).digest('hex');
+          if(digest!=='be5fe620f930ed88e08669344745e537b162e41f21a60f2c4ea9c770815c6602')throw Error('Unapproved build script');
+          if(createHash('sha256').update(fs.readFileSync('selftest.mjs')).digest('hex')!=='9990abf615e4f3ec82dcaa27696741ad462fc68d707b01c04f0b40ac9d13c112')throw Error('Unapproved trial self-test');
+          JS
+      - name: Immutable trial and existing public example checks
+        run: node --test selftest.mjs tests/*.test.mjs
+      - name: Bound source CI and artifact before manual deployment
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          BUILD_ATTEMPT: ${{ inputs.build_attempt }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          PACKAGE_DIGEST: ${{ inputs.package_digest }}
+          APPROVAL_DIGEST: ${{ inputs.approval_digest }}
+        run: |
+          node --input-type=module <<'JS'
+          const e=process.env,repo='allenge007/hermes-delivery-demo',id=1411533905,head=e.SOURCE_SHA;
+          for(const key of ['BUILD_RUN_ID','BUILD_ATTEMPT','ARTIFACT_ID'])if(!/^[1-9][0-9]*$/.test(e[key])||!Number.isSafeInteger(Number(e[key])))throw Error('Invalid ID');
+          for(const key of ['ARTIFACT_SHA256','PACKAGE_DIGEST','APPROVAL_DIGEST'])if(!/^[a-f0-9]{64}$/.test(e[key]))throw Error('Invalid digest');
+          const get=async suffix=>{const r=await fetch('https://api.github.com/repos/'+repo+suffix,{redirect:'error',signal:AbortSignal.timeout(12000),headers:{Accept:'application/vnd.github+json','X-GitHub-Api-Version':'2022-11-28'}});if(r.status!==200)throw Error('Readback unavailable');const text=await r.text();if(Buffer.byteLength(text)>128000)throw Error('Oversize');return JSON.parse(text);};
+          const runId=Number(e.BUILD_RUN_ID),attempt=Number(e.BUILD_ATTEMPT),artifactId=Number(e.ARTIFACT_ID);
+          const run=await get('/actions/runs/'+runId),pinned=await get('/actions/runs/'+runId+'/attempts/'+attempt);
+          for(const r of [run,pinned])if(r.id!==runId||r.run_attempt!==attempt||r.head_sha!==head||r.repository.id!==id||r.head_repository.id!==id||r.status!=='completed'||r.conclusion!=='success')throw Error('CI changed');
+          const associations=run.pull_requests.filter(p=>p.head.sha===head&&p.base.repo.id===id);
+          if(associations.length!==1)throw Error('Exact PR required');const pr=await get('/pulls/'+associations[0].number);
+          if(!pr.merged||pr.head.sha!==head||pr.head.repo.id!==id||pr.base.repo.id!==id||pr.merge_commit_sha!==e.GITHUB_SHA)throw Error('Merged approved PR changed');
+          const jobs=await get('/actions/runs/'+runId+'/attempts/'+attempt+'/jobs?per_page=100&page=1');
+          if(jobs.total_count!==jobs.jobs.length||jobs.total_count>100||jobs.jobs.filter(j=>j.name==='build'&&j.run_id===runId&&j.head_sha===head&&(j.run_attempt??attempt)===attempt&&j.status==='completed'&&j.conclusion==='success').length!==1)throw Error('Required build check unverified');
+          const page=await get('/actions/runs/'+runId+'/artifacts?per_page=100&page=1');
+          if(page.total_count!==page.artifacts.length||page.total_count>100)throw Error('Incomplete artifacts');
+          const selected=page.artifacts.filter(a=>a.id===artifactId);
+          if(selected.length!==1)throw Error('Artifact ambiguous');const a=selected[0];
+          if(a.name!=='github-pages'||a.expired||a.digest!=='sha256:'+e.ARTIFACT_SHA256||a.workflow_run.id!==runId||a.workflow_run.head_sha!==head||a.workflow_run.repository_id!==id||a.workflow_run.head_repository_id!==id)throw Error('Approved source artifact changed');
+          JS
       - name: Build exact source artifact
         env:
-          DEMO_SOURCE_COMMIT: ${{ github.sha }}
+          DEMO_SOURCE_COMMIT: ${{ env.SOURCE_SHA }}
         run: node scripts/build.mjs
-      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Record actual source CI custody
+        if: github.event_name == 'pull_request'
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          fs.writeFileSync('site/ci-custody.json',JSON.stringify({repositoryId:1411533905,repositoryPath:'allenge007/hermes-delivery-demo',sourceCommit:process.env.SOURCE_SHA,runId:Number(process.env.GITHUB_RUN_ID),attempt:Number(process.env.GITHUB_RUN_ATTEMPT)})+'\n');
+          JS
+      - name: Revalidate approved static package and record source archive mapping
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+          BUILD_ATTEMPT: ${{ inputs.build_attempt }}
+          ARTIFACT_ID: ${{ inputs.artifact_id }}
+          ARTIFACT_SHA256: ${{ inputs.artifact_sha256 }}
+          PACKAGE_DIGEST: ${{ inputs.package_digest }}
+          APPROVAL_DIGEST: ${{ inputs.approval_digest }}
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';import {createHash} from 'node:crypto';
+          const e=process.env,m=JSON.parse(fs.readFileSync('site/build-info.json'));
+          const canonical=v=>JSON.stringify(v,(_,x)=>x&&typeof x==='object'&&!Array.isArray(x)?Object.fromEntries(Object.keys(x).sort().map(k=>[k,x[k]])):x);
+          const digest=createHash('sha256').update(canonical(m)).digest('hex');
+          if(m.sourceCommit!==e.SOURCE_SHA||digest!==e.PACKAGE_DIGEST)throw Error('Approved static bytes changed');
+          fs.writeFileSync('site/delivery-receipt.json',JSON.stringify({sourceSha:e.SOURCE_SHA,artifactId:Number(e.ARTIFACT_ID),artifactDigest:e.ARTIFACT_SHA256,approvalDigest:e.APPROVAL_DIGEST,packageDigest:digest,buildRunId:Number(e.BUILD_RUN_ID),buildAttempt:Number(e.BUILD_ATTEMPT)})+'\n');
+          JS
       - uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:
           path: site
   deploy:
-    if: github.repository == 'allenge007/hermes-delivery-demo' && github.ref == 'refs/heads/main'
+    if: github.repository == 'allenge007/hermes-delivery-demo' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -41,8 +130,9 @@ jobs:
       id-token: write
     environment:
       name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+      url: https://www.allenge.me/hermes-delivery-demo/
     steps:
-      - name: Deploy the checked artifact
+      - uses: actions/configure-pages@983d7736d9b0ae728b81ab479565c72886d7745b # v5
+      - name: Deploy approved static package after exact source CI revalidation
         id: deployment
         uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
